@@ -5,10 +5,10 @@ library(RSQLite)
 library(tidyverse)
 
 #read shp
-shape <- st_read("Homework/Territorial_Authority/territorial-authority-2018-generalised.shp")
+shape <- st_read("Data/Homework/Territorial_Authority/territorial-authority-2018-generalised.shp")
 
 #csv
-mycsv <- read_csv("Homework/Dataset/NZ_employment2018.csv")
+mycsv <- read_csv("Data/Homework/Dataset/NZ_employment2018.csv")
 
 mycsv
 
@@ -30,11 +30,11 @@ tm_shape(shape2) + tm_fill("Paid employee", style = "quantile", palette = "Green
 #gpkg
 shape2 %>%
   st_write(.,
-           "Homework/Dataset/NZemployment.gpkg",
+           "Data/Homework/Dataset/NZemployment.gpkg",
            delete_layer = TRUE)
 
 con <- dbConnect(SQLite(),
-                 dbname = "Homework/Dataset/NZemployment.gpkg")
+                 dbname = "Data/Homework/Dataset/NZemployment.gpkg")
 
 con %>%
   dbWriteTable(.,
