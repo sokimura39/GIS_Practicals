@@ -1,0 +1,16 @@
+---
+title: "Week4"
+author: "Soki Kimura"
+date: "2023-10-25"
+output: html_document
+---
+
+```{r}
+library(terra)
+
+map <- rast("../Week3/Data/wc2.1_5m_tavg/wc2.1_5m_tavg_01.tif")
+
+plot(map)
+
+```
+
