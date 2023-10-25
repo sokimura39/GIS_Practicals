@@ -1,0 +1,201 @@
+---
+title: "Week3_hw"
+author: "Soki Kimura"
+date: "2023-10-19"
+output: html_document
+---
+
+# load packages
+
+```{r}
+library(tidyverse)
+library(sf)
+library(readr)
+library(terra)
+library(dplyr)
+```
+
+# load data
+```{r}
+# load map
+japan <- st_read("Data/gadm41_JPN.gpkg", layer = "ADM_ADM_0")
+
+# get cities from geographic file
+cities <- st_read("Data/World_Cities.geojson")
+cities_jp <- cities %>%
+  filter(., FIPS_CNTRY == "JA") %>%
+  select(., FID, CITY_NAME,POP,POP_RANK,geometry)
+
+cities_vect <- vect(cities_jp)
+
+city_list <- cities_jp %>%
+  pull(CITY_NAME)
+
+```
+
+# load temperatures 
+
+## load together
+```{r eval=FALSE, include=FALSE}
+
+paths <- c(
+  "Data/wc2.1_5m_tmax_ACCESS-CM2_ssp126_2081-2100.tif",
+  "Data/wc2.1_5m_tmax_ACCESS-CM2_ssp585_2081-2100.tif"
+)
+temp_raster <- terra::rast(paths)
+
+plot(temp_raster)
+
+# extract City Temperature
+cities_temp_all <- terra::extract(temp_raster, cities_vect) %>%
+  as_tibble(.) %>%
+  add_column(city = city_list, .before = "tmax01")
+  # mutate(., max = pmax(tmax01,tmax02,tmax03,tmax04,tmax05,tmax06,
+  #                      tmax07,tmax08,tmax09,tmax10,tmax11,tmax12),
+  #        .before = tmax01) %>%
+  # rename(., 
+  #        Jan = tmax01, Feb = tmax02, Mar = tmax03, Apr = tmax04, May = tmax05, Jun = tmax06,
+  #        Jul = tmax07, Aug = tmax08, Sep = tmax09, Oct = tmax10, Nov = tmax11, Dec = tmax12)
+
+```
+
+
+## load separately
+```{r}
+temp_ssp1 <- terra::rast("Data/wc2.1_5m_tmax_ACCESS-CM2_ssp126_2081-2100.tif")
+temp_ssp5 <- terra::rast("Data/wc2.1_5m_tmax_ACCESS-CM2_ssp585_2081-2100.tif")
+
+max_ssp1 <- max(temp_ssp1)
+max_ssp5 <- max(temp_ssp5)
+
+max_difference <- max_ssp5 - max_ssp1
+
+plot(max_difference)
+
+# get temperatures for SSP1 and SSP5
+
+cities_temp_ssp1 <- terra::extract(temp_ssp1, cities_vect) %>%
+  as_tibble(.) %>%
+  add_column(city = city_list, .before = "tmax01") %>%
+  mutate(., SSP = "SSP1", .before = city)
+
+cities_temp_ssp2 <- terra::extract(temp_ssp5, cities_vect) %>%
+  as_tibble(.) %>%
+  add_column(city = city_list, .before = "tmax01") %>%
+  mutate(., SSP = "SSP5", .before = city)
+
+cities_temp_all <- rbind(cities_temp_ssp1, cities_temp_ssp2) %>%
+  mutate(., max = pmax(tmax01,tmax02,tmax03,tmax04,tmax05,tmax06,
+                       tmax07,tmax08,tmax09,tmax10,tmax11,tmax12),
+         .before = tmax01) %>%
+  rename(
+    .,
+    Jan = tmax01, Feb = tmax02,
+    Mar = tmax03, Apr = tmax04,
+    May = tmax05, Jun = tmax06,
+    Jul = tmax07, Aug = tmax08,
+    Sep = tmax09, Oct = tmax10,
+    Nov = tmax11, Dec = tmax12) %>%
+  left_join(., cities_jp,
+            by = c("city" = "CITY_NAME")) 
+
+# Make Long Data
+all_temps <- cities_temp_all %>%
+  pivot_longer(
+    .,
+    cols = 4:16,
+    names_to = "month",
+    values_to = "temp"
+    ) %>%
+  select(SSP,city,month,temp) %>%
+  mutate(month = factor(month, levels = c("Jan","Feb","Mar","Apr","May","Jun",
+                                          "Jul","Aug","Sep","Oct","Nov","Dec","max")))
+
+
+# get data from CSV
+# cities_csv <- read_csv("Data/World_Cities.csv") %>%
+#   filter(., FIPS_CNTRY == "JA") %>%
+#   select(X, Y, FID, CITY_NAME, POP, POP_RANK)
+# 
+# samples <- data.frame(cities_csv, row.names = "CITY_NAME") %>%
+#   select(X, Y) %>%
+#   rename(lon = X, lat = Y)
+# 
+# temp_ssp1_cities <- terra::extract(temp_ssp1, samples) %>%
+#   as_tibble(.) %>%
+#   add_column(city = "CITY_NAME")
+
+# Make Long Data
+# ssp1_longer <- cities_temp_ssp1 %>%
+#   pivot_longer(., cols = 4:15, 
+#                names_to = "month",
+#                values_to ="temp") %>%
+#   select(city,month,temp) %>%
+#   mutate(., SSP = "SSP1", .before = city)
+# 
+# ssp2_longer <- cities_temp_ssp2 %>%
+#   pivot_longer(., cols = 4:15, 
+#                names_to = "month",
+#                values_to ="temp") %>%
+#   select(city,month,temp) %>%
+#   mutate(., SSP = "SSP5", .before = city)
+#   
+# all_temps <- rbind(ssp1_longer, ssp2_longer) %>%
+#   mutate(month = factor(month, levels = c("Jan","Feb","Mar","Apr","May","Jun",
+#                                           "Jul","Aug","Sep","Oct","Nov","Dec")))
+
+```
+
+
+# Draw bar chart
+
+```{r}
+compare_max <- all_temps %>%
+  filter(month == "max")
+
+ggplot(
+  compare_max,
+  aes(x = city, y = temp, fill = SSP)
+) + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  labs(# labels
+    title = "Difference in temperature in Japanese cities in SSP1 and SSP5",
+    x = "City",
+    y = "Maximum Annual Temperature"
+  ) + 
+  theme_classic() + 
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)
+  )
+
+
+```
+
+
+
+
+# Draw Line Chart for Tokyo
+
+```{r}
+
+tokyo <- all_temps %>%
+  filter(., city == "Tokyo" & month != "max")
+
+ggplot(tokyo,
+       aes(x = month,
+           y = temp,
+           color = SSP,
+           fill = SSP),) + 
+  geom_line(aes(group = SSP),
+            position = "identity",
+            alpha = 0.5) +
+  labs(title = "Comparison of the Monthly Maximum Temperature in Tokyo\nbetween SSP1 and SSP5",
+       x = "Month",
+       y = "Maximum temperature in 2081-2100") + 
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+

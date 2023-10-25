@@ -1,0 +1,127 @@
+---
+title: "week2_hw"
+author: "Soki Kimura"
+date: "2023-10-13"
+output: html_document
+---
+
+## import packages
+
+```{r}
+library(sf)
+library(readr)
+library(janitor)
+library(tidyverse)
+library(tmap)
+library(tmaptools)
+library(OpenStreetMap)
+```
+
+## load and filter/select data
+
+```{r}
+washington <- st_read("Data/Washington_Counties/Washington_Counties_with_Natural_Shoreline___washsh_area.shp") %>%
+  clean_names() %>%
+  select(objectid,countylabe,shape_leng,shape_area,geometry) %>%
+  rename(county=countylabe) 
+
+report_cards <- read_csv("Data/Report_Card_Assessment_Data_2018-19_School_Year_20231013.csv", na = c("", "NULL")) %>%
+  clean_names(.) %>%
+  select(organization_level,county,student_group,grade_level,test_subject,suppression,count_of_students_expected_to_test,count_met_standard)
+
+# filter for state average
+state_average <- report_cards %>%
+  filter(., organization_level == "State" & 
+           student_group == "All Students" &
+           grade_level == "All Grades" &
+           test_subject == "Science") %>%
+  na.omit(.)
+
+
+# filter data
+report_cards <- report_cards %>%
+  filter(., organization_level == "District" & 
+           student_group == "All Students" &
+           grade_level == "All Grades" &
+           test_subject == "Science") %>%
+  na.omit(.)
+
+```
+
+## group and summarise data
+
+```{r}
+by_county <- report_cards %>%
+  filter(suppression=="None") %>%
+  group_by(county) %>%
+  summarise(., count = sum(count_of_students_expected_to_test), passed = sum(count_met_standard)) %>%
+  mutate(., percentage = round(passed/count,3))
+
+state_average2 <- state_average %>%
+  summarise(., count = sum(count_of_students_expected_to_test), passed = sum(count_met_standard)) %>%
+  mutate(., percentage = round(passed/count,3))
+
+average <- as.numeric(state_average2[1,3])
+  
+```
+
+## check if above or below average
+
+```{r}
+by_county <- by_county %>%
+  mutate(., comp = case_when(percentage >= average ~ "Above average",
+                      TRUE ~ "Below average"))
+
+```
+
+## join data with map
+
+```{r}
+washington_map <- washington %>%
+  left_join(.,
+            by_county,
+            by = c("county"="county"))
+  
+```
+
+## map (reading)
+
+```{r}
+tmap_mode("plot")
+
+osm_read <- washington %>%
+  st_bbox(.) %>%
+  tmaptools::read_osm(., type = "osm", zoom = NULL)
+
+tm_shape(osm_read) +
+  tm_rgb() +
+  tm_shape(washington_map) + 
+  tm_polygons("comp",
+              style="pretty",
+              palette = "Blues",
+              midpoint = NA,
+              title = "Grades",
+              alpha = 0.8) +
+  tm_compass(position = c("left","bottom"), type = "arrow") +
+  tm_scale_bar(position = c("left","bottom")) +
+  tm_layout(title = "Difference in Grades", legend.position = c("right","bottom"))
+
+```
+
+## map (interactive)
+
+```{r}
+
+tmap_mode("view")
+
+tm_basemap(server = "OpenStreetMap")
+tm_shape(washington_map) + 
+  tm_polygons("comp",
+              style="pretty",
+              palette = "Blues",
+              midpoint = NA,
+              id="county",
+              title = "Grades",
+              alpha = 0.8)
+
+```
