@@ -5,6 +5,23 @@ date: "2023-10-25"
 output: html_document
 ---
 
+# Readme
+
+Week 4 homework for the CASA0005 module.
+
+## Objectives
+1. Explain the use of and differences between Git and GitHub
+2. Create reproducible and open R code
+3. Produce RMarkdown documents that explain code and analysis
+
+## Procedures for this work
+
+1. Load the required packages
+2. Load the data
+3. Merge and analyze data
+4. Map using ggplot2 package
+5. Save File
+
 # Packages
 
 ```{r}
@@ -12,11 +29,18 @@ library(tidyverse)
 library(readr)
 library(sf)
 library(countrycode)
+library(ggspatial)
+# library(RColorBrewer)
+library(viridis)
+library(showtext) # to change font
 
 ```
 
 
 # Load Data
+
+Reproductivity for saving the data should be improved.
+
 ```{r}
 # source: https://hub.arcgis.com/datasets/2b93b06dc0dc4e809d3c8db5cb96ba69_0/explore?location=-0.002619%2C0.000000%2C1.00
 world_map <- st_read("Data/World_Countries_Generalized.geojson")
@@ -24,6 +48,7 @@ world_map <- st_read("Data/World_Countries_Generalized.geojson")
 # source: https://hdr.undp.org/sites/default/files/2021-22_HDR/HDR21-22_Composite_indices_complete_time_series.csv
 gii_table <- read_csv("Data/HDR21-22_Composite_indices_complete_time_series.csv") %>%
   dplyr::select(., iso3, country, contains("gii"))
+
 ```
 
 # Analyze data
@@ -58,12 +83,101 @@ gii_map <- world_map %>%
 # create map
 
 ```{r}
+# add fonts
+font_add_google("Fira Sans")
+showtext_auto()
 
-ggplot(data = gii_map) +
+# ggplot 
+plot <- 
+  ggplot(data = gii_map) +
   geom_sf(
-    aes(fill = gii_diff)
+    aes(fill = gii_diff, alpha = "No Data"), # add alpha to show 2nd legend for NA
+    color = "white",
+    lwd = 0.3
   ) + 
-  ggtitle("GII Difference between 2010 and 2019")
+
+  # set title and caption
+  labs(
+    title = "Change in Gender Inequality between 2010 and 2019",
+    caption = "Source: UNDP Human Development Reports (https://hdr.undp.org/data-center/documentation-and-downloads)"
+  ) +
+
+  # change scale aesthetics
+  scale_fill_viridis(
+    option = "magma",
+    begin = 0,
+    end = 1,
+    name = "Difference in GII",
+    na.value = "white",
+    guide = guide_colorbar(
+      direction = "horizontal",
+      reverse = TRUE,
+      barwidth = 20,
+      barheight = 0.5,
+      title.position = "top",
+      title.hjust = 0.6,
+      label.position = "bottom",
+    )
+  ) + 
+  
+  # scale for no data
+  scale_alpha_manual(
+    name = " ",
+    values = 1,
+    guide = guide_legend(
+      keywidth = 3,
+      keyheight = 0.5,
+      title.position = "top",
+      label.position = "bottom",
+      override.aes = list(fill = "white")
+    )
+  ) +
+  
+  # aesthetics
+  theme(
+    plot.background = element_rect(fill = "lightcyan4", linewidth = 0),
+    panel.background = element_rect(fill = "lightcyan4"),
+    text = element_text(
+      color = "white",
+      family = "Fira Sans"
+    ),
+    plot.title = element_text(
+      size = 20,
+      margin = margin(t = 10, b = 10),
+      hjust = 0.5
+    ),
+    legend.title = element_text(size = 15),
+    legend.position = "bottom",
+    legend.background = element_blank()
+  ) 
+
+plot
+```
+
+# Save Plot as image
+
+Before saving the plot, the size of text has been modified.
+
+```{r}
+# change the theme to save
+save <- plot + 
+  theme(
+    text = element_text(
+      size = 30,
+    ),
+    plot.title = element_text(
+      size = 50,
+    ),
+    legend.title = element_text(size = 30),
+  ) 
+  
+# save ggplot to image
+ggsave(
+  "Output/GII.png",
+  plot = save,
+  height = 7,
+  width = 7)
+
 
 ```
 
