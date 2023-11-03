@@ -1,0 +1,195 @@
+---
+title: "Week5"
+author: "Soki Kimura"
+date: "2023-11-01"
+output: html_document
+---
+
+## Load libraries
+
+```{r}
+
+library(sf)
+library(janitor)
+library(tidyverse)
+library(here) # added for cross-platform reproducibility
+library(readr)
+library(tmap)
+library(RColorBrewer)
+
+```
+
+
+
+## Load Data
+
+```{r}
+
+# Load shapefile for boroughs
+london_boroughs <- 
+  st_read(
+    here::here(
+      "Week5", 
+      "Data", 
+      "statistical-gis-boundaries-london", 
+      "ESRI",
+      "London_Borough_Excluding_MHW.shp"
+      )
+  ) %>%
+  clean_names(.) %>%
+  st_transform(., 27700)
+
+# Load shapefile for UK
+uk_shape <- 
+  st_read(
+    here::here("Week5", "Data", "gadm41_GBR_shp", "gadm41_GBR_0.shp")
+  ) %>%
+  clean_names(.)
+
+# Simplify and transform into British National Grid
+uk_shape <- uk_shape %>%
+  st_simplify(., dTolerance = 100) %>%
+  st_transform(., 27700)
+
+# Load data for cities
+uk_cities <- 
+  st_read(here::here("Week5", "Data", "World_Cities", "World_Cities.shp")) %>%
+  clean_names() %>%
+  filter(., fips_cntry == "UK") %>%
+  st_transform(., 27700)
+
+# reduce number
+uk_cities2 <- uk_cities %>%
+  filter(., grepl("capital", status))
+
+# Load data for hotels
+hotels <- 
+  st_read(
+    here::here(
+      "Week5", 
+      "Data", 
+      "greater-london-latest-free.shp",
+      "gis_osm_pois_a_free_1.shp"
+    )
+  ) %>%
+  filter(., fclass == "hotel") %>%
+  st_transform(., 27700)
+
+# Load data for AirBNB
+airbnb <- 
+  read_csv(
+    here::here("Week5", "Data", "listings.csv")
+  ) %>%
+  select(
+    .,
+    id,
+    neighbourhood,
+    latitude,
+    longitude,
+    room_type,
+    price,
+    availability_365
+  ) %>%
+  filter(room_type == "Entire home/apt" & availability_365 == 365) %>%
+  st_as_sf(
+    .,
+    coords = c("longitude","latitude"), 
+    crs = 4326
+  ) %>%
+  st_transform(., 27700)
+
+
+```
+
+## Join Data 
+
+```{r}
+
+# join AirBNB data and add numbers
+bnb_boroughs <- 
+  st_join(london_boroughs, airbnb) %>%
+  group_by(., gss_code, name) %>%
+  summarize("bnbs" = n())
+
+# join Hotels data and add numbers
+hotels_boroughs <-
+  st_join(london_boroughs, hotels) %>%
+  group_by(., gss_code, name.x) %>%
+  summarize("hotels" = n())
+```
+
+## Make map
+
+```{r}
+
+# setup tmap
+tmap_mode("plot")
+breaks <- c(0, 10, 22, 40, 154, 386)
+
+# plot each map
+
+# plot AirBNB
+tm1 <- 
+  tm_shape(bnb_boroughs) +
+  tm_polygons(
+    "bnbs",
+    breaks = breaks,
+    palette = "Reds"
+  ) + 
+  tm_legend(show = FALSE) +
+  tm_layout(frame = FALSE) +
+  tm_credits("AirBNBs", position = c(0,0.85), size = 1.5)
+
+# plot hotels
+tm2 <- 
+  tm_shape(hotels_boroughs) +
+  tm_polygons(
+    "hotels",
+    breaks = breaks,
+    palette = "Reds"
+  ) + 
+  tm_legend(show = FALSE) +
+  tm_layout(frame = FALSE) +
+  tm_credits("Hotels", position = c(0,0.85), size = 1.5)
+
+# plot UK map
+tm3 <- 
+  tm_shape(uk_shape) + 
+  tm_polygons(col = "aquamarine4", border.col = NULL) +
+  tm_layout(frame = FALSE) + 
+  
+  # plot cities
+  tm_shape(uk_cities2) + 
+  tm_symbols(col = "orange", scale = 0.5, border.col = "white") + 
+  tm_text("city_name", xmod = -1, ymod = -0.5)
+
+# plot legend
+legend <- 
+  tm_shape(hotels_boroughs) +
+  tm_polygons(
+    "hotels",
+    breaks = breaks,
+    palette = "Reds"
+  ) + 
+  tm_scale_bar(
+    position = c(0.2, 0.04),
+    text.size = 0.6
+  ) +
+  tm_compass(north = 0, position = c(0.65, 0.6)) +
+  tm_layout(
+    legend.only = TRUE,
+    legend.position = c(0.2, 0.25),
+    asp = 0.1
+  ) +
+  tm_credits(
+    "(c) OpenStreetMap contributors and AirBNB",
+    position = c(0,0)
+  )
+
+tmap_arrange(tm1, tm2, tm3, legend, ncol = 2)
+
+
+
+```
+
+
