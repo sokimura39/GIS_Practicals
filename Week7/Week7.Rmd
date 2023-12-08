@@ -1,0 +1,198 @@
+---
+title: "Week7"
+author: "Soki Kimura"
+date: "2023-11-22"
+output: html_document
+---
+
+## load libraries and data
+
+```{r load libraries}
+
+library(sf)
+library(tidyverse)
+library(janitor)
+library(tmap)
+library(here)
+library(spdep)
+
+```
+
+
+
+
+```{r load data}
+
+wards <- st_read("Data/statistical-gis-boundaries-london/ESRI/London_Ward.shp") %>%
+  st_transform(., 27700)
+
+wards_merged <- st_read("Data/statistical-gis-boundaries-london/ESRI/London_Ward_CityMerged.shp") %>%
+  st_transform(., 27700)
+
+ward_data <- read_csv(
+  "https://data.london.gov.uk/download/ward-profiles-and-atlas/772d2d64-e8c6-46cb-86f9-e52b4c7851bc/ward-profiles-excel-version.csv",
+  locale = locale(encoding = "latin1"),
+   na = c("NA", "n/a")
+) %>%
+  clean_names(.)
+
+blue_plaques <- st_read(here::here("Week6", "Data", "open-plaques-london-2018-04-08.geojson")) %>%
+  st_transform(., 27700)
+
+```
+
+## Clean data
+
+```{r}
+
+wards_merged <- wards_merged %>%
+  left_join(., ward_data, by = c("GSS_CODE" = "new_code")) %>%
+  dplyr::distinct(GSS_CODE, .keep_all = TRUE) %>%
+  dplyr::select(GSS_CODE, ward_name, average_gcse_capped_point_scores_2014)
+
+```
+
+
+```{r plot echo = False}
+
+tmap_mode("plot")
+
+tm_shape(wards_merged) +
+  tm_polygons(col = NA, alpha = 0.5) + 
+tm_shape(blue_plaques) + 
+  tm_dots(col = "blue")
+
+```
+
+
+```{r manipulate blue plaques}
+
+blue_plaques_sub <- blue_plaques[wards_merged, ]
+
+example <- st_intersects(wards_merged, blue_plaques_sub)
+# example
+
+check_example <- wards_merged %>%
+  st_join(., blue_plaques_sub) %>%
+  filter(., ward_name == "Kingston upon Thames - Coombe Hill")
+
+points_sf_joined <- wards_merged %>%
+  # count number per ward
+  mutate(n = lengths(st_intersects(., blue_plaques_sub))) %>%
+  janitor::clean_names(.) %>%
+  
+  # calculate area
+  mutate(area = st_area(.)) %>%
+  
+  # calculate density of blue plaques
+  mutate(density = n / area) %>%
+  
+  # select columns
+  dplyr::select(density, ward_name, gss_code, n, average_gcse_capped_point_scores_2014)
+  
+
+```
+
+
+
+
+```{r plot map}
+
+points_sf_joined <- points_sf_joined %>%
+  group_by(gss_code) %>%
+  summarize(
+    density = first(density),
+    ward_name = first(ward_name),
+    plaquecount = first(n)
+  )
+
+tmap_mode("view")
+tm_shape(points_sf_joined) +
+  tm_polygons(
+    "density",
+    style = "jenks",
+    palette = "Greens",
+    popup.vars = c("ward_name", "density"),
+    title = "Blue Plaque Density"
+  )
+
+```
+
+## Weight Matrix
+
+```{r}
+
+# calculate centroid for wards
+coordsW <- points_sf_joined %>%
+  st_centroid(.) %>%
+  st_geometry(.)
+
+plot(coordsW, axes = TRUE)
+
+# create a neighbours list
+LWard_nb <- points_sf_joined %>%
+  poly2nb(., queen = TRUE)
+
+# summary(LWard_nb)
+
+# plot the neighbours
+tmap_mode("plot")
+plot(LWard_nb, st_geometry(coordsW), col = "red")
+plot(points_sf_joined$geometry, add = TRUE)
+
+# create spatial weights matrix
+LWard.lw <- LWard_nb %>%
+  nb2mat(., style = "B") # binary
+
+
+```
+
+## Autocorrelation
+
+### Global Indeces
+
+```{r Moran's I}
+
+# convert neighbours to spatial list
+LWard.lw <- LWard_nb %>%
+  nb2listw(., style = "C") # globally standardised
+
+# calculate Moran's I
+I_LWard_Global_Density <- points_sf_joined %>%
+  pull(density) %>%
+  as.vector() %>%
+  moran.test(., LWard.lw)
+
+I_LWard_Global_Density
+
+```
+
+```{r Geary's C}
+
+C_LWard_Global_Density <- points_sf_joined %>%
+  pull(density) %>%
+  as.vector(.) %>%
+  geary.test(., LWard.lw)
+
+C_LWard_Global_Density
+
+```
+
+```{r Getis Ord General G}
+
+G_LWard_Global_Density <- points_sf_joined %>%
+  pull(density) %>%
+  as.vector(.) %>%
+  globalG.test(., LWard.lw)
+
+G_LWard_Global_Density
+
+
+```
+
+### Local Indeces
+
+
+
+
+

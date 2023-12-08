@@ -1,0 +1,301 @@
+---
+title: "Week6"
+author: "Soki Kimura"
+date: "2023-11-15"
+output: html_document
+---
+
+# Week 6: Detecting spatial patterns
+
+## Load libraries
+
+```{r libraries}
+
+library(tidyverse)
+library(sf)
+library(here)
+library(tmap)
+library(spatstat)
+library(fpc)
+library(raster)
+library(dbscan)
+library(OpenStreetMap)
+
+```
+
+## Load data
+
+```{r loading data}
+
+# Load boroughs shapefile
+BoroughMap <- st_read(
+  here::here(
+    "Week1", "Data", "London", "statistical-gis-boundaries-london", "ESRI",
+    "London_Borough_Excluding_MHW.shp"
+  )) %>%
+  st_transform(., 27700)
+  
+qtm(BoroughMap)  
+
+# Load Blue Plaque Data
+# Second row will load directory from source URL
+BluePlaques <- st_read(
+  here::here(
+    "Week6", "Data", "open-plaques-london-2018-04-08.geojson"
+  )
+) %>%
+  st_transform(., 27700)
+# BluePlaques <- st_read("https://s3.eu-west-2.amazonaws.com/openplaques/open-plaques-london-2018-04-08.geojson")
+
+# summary(BluePlaques)
+
+```
+
+## Map the Blue Plaques
+
+```{r map}
+
+tmap_mode("plot")
+
+tm_shape(BoroughMap) +
+  tm_polygons(col = NA, alpha = 0.5) +
+tm_shape(BluePlaques) +
+  tm_dots(col = "blue")
+
+```
+
+## Data cleaning
+
+```{r data cleaning}
+
+# remove duplicates
+BluePlaques <- distinct(BluePlaques)
+
+
+# spatial subsetting
+BluePlaquesSub <- BluePlaques[BoroughMap, ]
+
+# check subset worked by mapping
+# tmap_mode("plot")
+# 
+# tm_shape(BoroughMap) +
+#   tm_polygons(col = NA, alpha = 0.5) +
+# tm_shape(BluePlaquesSub) +
+#   tm_dots(col = "blue")
+
+
+```
+
+## Extract one borough for analysis
+
+```{r}
+
+# Extract the borough of Harrow
+
+Harrow <- BoroughMap %>%
+  dplyr::filter(., NAME == "Harrow")
+
+# spatial subsetting
+BluePlaquesSub <- BluePlaques[Harrow, ]
+
+
+```
+
+## SpatStat
+
+### Preparation
+
+```{r}
+
+# set window for analysis
+window <- as.owin(Harrow)
+
+
+# create sp object
+BluePlaquesSub <- BluePlaquesSub %>%
+  as(., "Spatial")
+
+BluePlaquesSub.ppp <- 
+  ppp(
+    x = BluePlaquesSub@coords[,1],
+    y = BluePlaquesSub@coords[,2],
+    window = window
+  )
+
+BluePlaquesSub.ppp %>%
+  plot(., pch = 16, cex = 0.5, main = "Blue Plaques in Harrow")
+
+```
+
+### Kernel Density Distribution
+```{r}
+
+BluePlaquesSub.ppp %>%
+  density(., sigma = 1000) %>%
+  plot(.)
+
+```
+
+### Quadrat Analysis
+
+```{r plot quadrat}
+# plot points
+plot(BluePlaquesSub.ppp, pch = 16, cex = 0.5, main = "Blue Plaques in Harrow" )
+
+# add to plot
+BluePlaquesSub.ppp %>%
+  quadratcount(., nx = 6, ny = 6) %>%
+  plot(., add = T, col = "red")
+```
+
+
+```{r quadrat calculation}
+# make Qcount
+Qcount <- BluePlaquesSub.ppp %>%
+  quadratcount(., nx = 6, ny = 6) %>%
+  as.data.frame() %>%
+  dplyr::count(Var1 = Freq) %>%
+  dplyr::rename(freq_quadrant_count = n)
+
+# check class for column
+Qcount %>%
+  summarize_all(class)
+
+# calculate sum and lambda
+sums <- Qcount %>%
+  # total blue plaques
+  mutate(total = Var1 * freq_quadrant_count) %>%
+  dplyr::summarize(across(everything(), sum)) %>%
+  dplyr::select(-Var1)
+
+lambda <- sums %>%
+  mutate(lambda = total / freq_quadrant_count) %>%
+  dplyr::select(lambda) %>%
+  pull(lambda)
+
+# calculate expected value
+Qcounttable <- Qcount %>%
+  mutate(Pr = ((lambda ^ Var1) * exp(-lambda)) / factorial(Var1)) %>%
+  mutate(Expected = round(Pr * sums$freq_quadrant_count,0))
+
+# plot the differece
+plot(
+  c(1,5), c(0, 14), type = "n",
+  xlab = "Number of Blue Plaques (Red=Observed,Blue=Expected)", 
+  ylab="Frequency of Occurances"
+)
+points(Qcounttable$freq_quadrant_count, col = "red", type = "o", lwd = 3)
+points(Qcounttable$Expected, col = "blue", type = "o", lwd = 3)
+
+```
+
+
+
+
+```{r quadrat test}
+
+teststats <- quadrat.test(BluePlaquesSub.ppp, nx = 6, ny = 6)
+
+plot(
+  BluePlaquesSub.ppp, pch = 16, cex = 0.5,
+  main = "Blue Plaques in Harrow"
+)
+plot(teststats, add = T, col = "red")
+
+```
+
+## Ripley's K
+
+```{r Ripley's K}
+
+K <- BluePlaquesSub.ppp %>%
+  Kest(., correction = "border") %>%
+  plot(.)
+
+Kval <- as.data.frame(Kest(BluePlaquesSub.ppp, correction = "Ripley"))
+
+```
+
+## DBSCAN
+
+```{r DBSCAN}
+
+st_geometry(BoroughMap)
+
+BluePlaquesSubPoints <- BluePlaquesSub %>%
+  coordinates(.) %>%
+  as.data.frame()
+
+db <- BluePlaquesSubPoints %>%
+  fpc::dbscan(., eps = 700, MinPts = 4)
+
+plot(db, BluePlaquesSubPoints, main = "DBSCAN Output", frame = F)
+plot(BoroughMap$geometry, add = T)
+
+```
+
+```{r kNNdistplot}
+
+BluePlaquesSubPoints %>%
+  dbscan::kNNdistplot(., k = 4)
+
+```
+
+```{r plot using ggplot2}
+
+# add membership to list of points
+BluePlaquesSubPoints <- BluePlaquesSubPoints %>%
+  mutate(dbcluster = db$cluster)
+
+# convex hull
+chulls <- BluePlaquesSubPoints %>%
+  group_by(dbcluster) %>%
+  dplyr::mutate(
+    hull = 1:n(), 
+    hull = factor(hull, chull(coords.x1, coords.x2))) %>%
+  arrange(hull) %>%
+  filter(dbcluster >= 1)
+
+# add basemap
+bbox <- Harrow %>%
+  st_transform(., 4326) %>%
+  st_bbox(.)
+
+basemap <- 
+  OpenStreetMap::openmap(
+    c(bbox[4], bbox[1]),
+    c(bbox[2], bbox[3]),
+    zoom = NULL,
+    "osm"
+)
+
+basemap_bng <- openproj(basemap, projection = "epsg:27700")
+
+# ggplot
+dbplot <- 
+  # basemap
+  autoplot.OpenStreetMap(basemap_bng) +
+  
+  # add point
+  geom_point(
+    data = BluePlaquesSubPoints, 
+    aes(x = coords.x1, y = coords.x2, 
+        color = dbcluster, fill = dbcluster)
+  ) +
+  geom_polygon(
+    data = chulls,
+    aes(coords.x1, coords.x2, group = dbcluster, fill = dbcluster),
+    alpha = 0.5
+  ) +
+  theme_bw() +
+  coord_equal()
+
+
+dbplot
+
+
+
+```
+
+
+
