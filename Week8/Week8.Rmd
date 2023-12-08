@@ -1,0 +1,571 @@
+---
+title: "Week8"
+author: "Soki Kimura"
+date: "2023-12-08"
+output: html_document
+---
+
+
+## Load libraries
+
+```{r}
+
+library(tidyverse)
+library(tmap)
+library(geojsonio)
+library(plotly)
+library(rgdal)
+library(broom)
+library(mapview)
+library(crosstalk)
+library(sf)
+library(sp)
+library(spdep)
+library(car)
+library(fs)
+library(janitor)
+library(tidypredict)
+library(tidymodels)
+library(corrr)
+library(performance)
+library(see)
+library(spatialreg)
+library(lmtest)
+
+```
+
+```{r prepare data}
+
+# download file from London Data Store
+download.file("https://data.london.gov.uk/download/statistical-gis-boundary-files-london/9ba8c833-6370-4b11-abdc-314aa020d5e0/statistical-gis-boundaries-london.zip", 
+              destfile="Data/statistical-gis-boundaries-london.zip")
+
+
+# unzip file
+listfiles <- dir_info(here::here("Week8", "Data")) %>%
+  dplyr::filter(str_detect(path, ".zip")) %>%
+  dplyr::select(path) %>%
+  pull() %>%
+  print() %>%
+  as.character() %>%
+  utils::unzip(exdir = here::here("Week8", "Data"))
+
+```
+
+```{r load data}
+
+# read the shapefile
+london_wards <- fs::dir_info(here::here("Week8", "Data", "statistical-gis-boundaries-london", "ESRI")) %>%
+  dplyr::filter(str_detect(path, "London_Ward_CityMerged.shp$")) %>%
+  dplyr::select(path) %>%
+  dplyr::pull() %>%
+  sf::st_read()
+
+# check the wards data
+# qtm(london_wards)
+
+# read in the 
+profiles <- read_csv("https://data.london.gov.uk/download/ward-profiles-and-atlas/772d2d64-e8c6-46cb-86f9-e52b4c7851bc/ward-profiles-excel-version.csv", 
+                     col_names = TRUE,
+                     na = c("", "NA", "n/a"),
+                     locale = locale(encoding = 'Latin1'))
+
+# check all columns have been read in correctly
+datatype <- profiles %>%
+  summarise_all(class) %>%
+  pivot_longer(everything(), names_to = "Variables", values_to = "Variable_class")
+
+# load schools
+schools <- read_csv("https://data.london.gov.uk/download/london-schools-atlas/57046151-39a0-45d9-8dc0-27ea7fd02de8/all_schools_xy_2016.csv") %>%
+  st_as_sf(., coords = c("EASTING", "NORTHING"), crs = 27700)
+
+sec_school <- schools %>%
+  filter(PHASE == "Secondary")
+
+qtm(sec_school)
+
+```
+## Merge data
+
+```{r}
+
+# join data by GSS CODE
+profiles <- london_wards %>%
+  left_join(., profiles, by = c("GSS_CODE" = "New code"))
+
+# map 
+tmap_mode("plot")
+qtm(
+  profiles,
+  fill = "Average GCSE capped point scores - 2014",
+  borders = NULL,
+  fill.palette = "Blues"
+)
+
+```
+
+## Regression
+
+```{r plot linear model}
+
+q <- qplot(
+  x = `Unauthorised Absence in All Schools (%) - 2013`,
+  y = `Average GCSE capped point scores - 2014`,
+  data = profiles
+)
+
+q + stat_smooth(method = "lm", se = FALSE, size = 1) +
+  geom_jitter()
+```
+
+
+
+```{r regression model}
+
+# run the linear regression model and results in model1
+regression_data <- profiles %>%
+  clean_names() %>%
+  dplyr::select(average_gcse_capped_point_scores_2014, 
+                unauthorised_absence_in_all_schools_percent_2013)
+
+
+model1 <- regression_data %>%
+  lm(average_gcse_capped_point_scores_2014 ~ 
+       unauthorised_absence_in_all_schools_percent_2013,
+     data = .)
+
+broom::tidy(model1)
+
+regression_data %>%
+  tidypredict::tidypredict_to_column(model1)
+
+```
+## Using the tidymodels verse
+
+```{r}
+
+# set the model
+lm_model <- linear_reg()
+
+lm_fit <- lm_model %>%
+  fit(average_gcse_capped_point_scores_2014 ~ 
+        unauthorised_absence_in_all_schools_percent_2013,
+      data = regression_data)
+tidy(lm_fit)
+
+glance(lm_fit)
+
+```
+## Assumptions of linear regression
+
+### linear correlation
+
+```{r distribution of score}
+
+ggplot(
+  profiles,
+  aes(x = `Average GCSE capped point scores - 2014`)
+) +
+  geom_histogram(
+    aes(y = after_stat(density)),
+    binwidth = 5
+  ) +
+  geom_density(color = "red", size = 1, adjust = 1)
+
+```
+
+```{r distribution of absence}
+
+ggplot(
+  profiles,
+  aes(x = `Unauthorised Absence in All Schools (%) - 2013`)
+) +
+  geom_histogram(
+    aes(y = after_stat(density)),
+    binwidth = 0.1
+  ) +
+  geom_density(color = "red", size = 1, adjust = 1)
+
+```
+
+```{r distribution of housing}
+
+profiles <- profiles %>%
+  janitor::clean_names()
+
+ggplot(profiles, aes(x = median_house_price_2014)) +
+  geom_histogram()
+
+qplot(x = median_house_price_2014,
+      y = average_gcse_capped_point_scores_2014,
+      data = profiles)
+
+```
+
+```{r variable transformation}
+# Tukey's Ladder
+symbox(
+  ~median_house_price_2014, 
+  profiles, 
+  na.rm = TRUE,
+  powers = seq(-3, 3, by = 0.5)
+)
+
+# log transformation
+ggplot(profiles, aes(x = (median_house_price_2014)^(-1))) +
+  geom_histogram()
+
+# scatter plot
+qplot(x = (median_house_price_2014)^(-1),
+      y = average_gcse_capped_point_scores_2014,
+      data = profiles)
+
+```
+
+### residuals normally distributed
+
+```{r}
+
+# save residuals
+model_data <- model1 %>%
+  augment(., regression_data)
+
+# plot residual
+model_data %>%
+  dplyr::select(.resid) %>%
+  pull() %>%
+  qplot() +
+  geom_histogram()
+
+```
+
+### no multicollinearity
+
+
+```{r creating model with 2 variables}
+
+# new regression model
+regression_data_2 <- profiles %>%
+  clean_names() %>%
+  dplyr::select(
+    average_gcse_capped_point_scores_2014,
+    unauthorised_absence_in_all_schools_percent_2013,
+    median_house_price_2014
+  )
+
+model2 <- lm(
+  average_gcse_capped_point_scores_2014 ~ 
+    unauthorised_absence_in_all_schools_percent_2013 +
+    log(median_house_price_2014),
+  data = regression_data_2
+)
+
+tidy(model2)
+glance(model2)
+
+# output the residuals
+model_data_2 <- model2 %>%
+  augment(., regression_data_2)
+
+# add residuals to the sf object
+profiles <- profiles %>%
+  mutate(model2resids = residuals(model2))
+
+```
+
+```{r checking multicollinearity using Pearson Correlation}
+
+correlation <- profiles %>%
+  st_drop_geometry() %>%
+  dplyr::select(
+    average_gcse_capped_point_scores_2014,
+    unauthorised_absence_in_all_schools_percent_2013,
+    median_house_price_2014
+  ) %>%
+  mutate(median_house_price_2014 = log(median_house_price_2014)) %>%
+  correlate() %>%
+  focus(-average_gcse_capped_point_scores_2014, mirror = TRUE)
+
+corrr::rplot(correlation)
+
+```
+
+```{r VIF}
+
+# calculate VIF for model2
+# variables exceeding 10 should be removed before analysis
+car::vif(model2)
+
+```
+```{r calculate collinearity for all}
+
+# calculate correlation
+correlation_all <- profiles %>%
+  st_drop_geometry() %>%
+  dplyr::select(c(10:73)) %>%
+  correlate()
+
+# plot
+rplot(correlation_all)
+
+```
+
+### homoscedasticity
+
+```{r}
+
+# plot model diagnostics
+par(mfrow = c(2, 2))
+plot(model2)
+
+```
+
+```{r a second way of plotting}
+
+performance::check_model(model2, check = "all")
+
+```
+### Independence of Errors
+
+```{r standard autocorrelation}
+
+# run Durbin-Watson test
+dw <- durbinWatsonTest(model2)
+tidy(dw)
+
+# 2: no autocorrelation
+# >2: negative autocorrelation
+# <2: positive autocorrelation
+
+```
+
+```{r spatial autocorrelation}
+
+# plot residuals
+
+tmap_mode("view")
+
+tm_shape(profiles) +
+  tm_polygons("model2resids", palette = "RdYlBu") +
+  tm_shape(sec_school) +
+  tm_dots(col = "TYPE")
+
+```
+
+```{r spatial autocorrelation indeces}
+
+# calculate centroid
+coordsW <- profiles %>%
+  st_centroid(.) %>%
+  st_geometry(.)
+
+plot(coordsW)
+
+# spatial weight matrix
+
+# binary matrix of Queen's case
+lward_nb <- profiles %>%
+  poly2nb(., queen = TRUE)
+
+# nearest neighbours
+knn_wards <- coordsW %>%
+  knearneigh(., k = 4)
+
+lward_knn <- knn_wards %>%
+  knn2nb()
+
+# plot
+plot(lward_nb, st_geometry(coordsW), col = "red")
+
+plot(lward_knn, st_geometry(coordsW), col = "blue")
+
+```
+```{r spatial weight matrix}
+
+# create spatial weight matrix
+# "W" is a row standardised version
+lward_queens_weight <- lward_nb %>%
+  nb2listw(., style = "W")
+
+lward_knn_4_weight <- lward_knn %>%
+  nb2listw(., style = "W")
+
+i_queen <- profiles %>%
+  st_drop_geometry() %>%
+  dplyr::select(model2resids) %>%
+  pull() %>%
+  moran.test(., lward_queens_weight) %>%
+  tidy(.)
+
+i_knn <- profiles %>%
+  st_drop_geometry() %>%
+  dplyr::select(model2resids) %>%
+  pull() %>%
+  moran.test(., lward_knn_4_weight) %>%
+  tidy(.)
+
+i_queen
+i_knn
+
+```
+a weak to moderate spatial autocorrelation, even though the assumptions of standard autocorrelation has been fulfilled!
+
+## Spatial Regression
+
+### spatial lag model
+
+The idea of spatial regression, where the dependent variable $y$ is affected by the neighbouring values
+
+$$
+y_i = \beta_0 + \beta_1x_i + \rho w_i \cdot y_i + \epsilon_i
+$$
+where $w$ is the spatial weights matrix, $\rho$ represents the spatial lag
+
+
+```{r spatial lag (Queen's Case)}
+
+# original model
+tidy(model2)
+
+# queen's case
+slag_queen <- lagsarlm(average_gcse_capped_point_scores_2014 ~
+                         unauthorised_absence_in_all_schools_percent_2013 +
+                         log(median_house_price_2014),
+                       data = profiles,
+                       nb2listw(lward_nb, style = "C"),
+                       method = "eigen")
+
+tidy(slag_queen)
+
+# compare results of the 2 models
+lrtest(slag_queen, model2)
+
+# comparing the effects of spatial to regular OLS
+weight_list <- nb2listw(lward_knn, style = "C")
+imp <- impacts(slag_queen, listw = weight_list)
+
+imp
+
+```
+
+```{r spatial lag (K Nearest Neighbours)}
+
+slag_knn <- lagsarlm(average_gcse_capped_point_scores_2014 ~
+                         unauthorised_absence_in_all_schools_percent_2013 +
+                         log(median_house_price_2014),
+                       data = profiles,
+                       nb2listw(lward_knn, style = "C"),
+                       method = "eigen")
+
+tidy(slag_knn)#
+
+```
+
+shows some spatial autocorrelation!!!
+
+```{r write out residual}
+
+profiles <- profiles %>%
+  mutate(slag_knn_resids = stats::residuals(slag_knn))
+
+i_knn_4 <- profiles %>%
+  st_drop_geometry() %>%
+  dplyr::select(slag_knn_resids) %>%
+  pull() %>%
+  moran.test(., lward_knn_4_weight) %>%
+  tidy(.)
+
+
+i_knn_4
+
+```
+
+### spatial error model
+
+treating as an error, more than being informative
+
+$$
+y_i = \beta_0 + \beta_1x_i + \lambda w_i \cdot \xi_i + \epsilon_i
+$$
+
+where $\xi$ is spatial component of the error (residuals of values surrounding), $\lambda$ extent of error correlationg with nearby observations
+
+
+```{r spatial error model}
+
+sem_model1 <- errorsarlm(average_gcse_capped_point_scores_2014 ~
+                         unauthorised_absence_in_all_schools_percent_2013 +
+                         log(median_house_price_2014),
+                       data = profiles,
+                       nb2listw(lward_knn, style = "C"),
+                       method = "eigen")
+tidy(sem_model1)
+
+```
+
+Scientific way of defining which model to use
+
+```{r Lagrange multiple test}
+
+lward_queens_weight_row <- lward_nb %>%
+  nb2listw(., style="W")
+
+lm.LMtests(
+  model2,
+  lward_queens_weight_row,
+  test = c("LMerr", "LMlag", "RLMerr", "RLMlag", "SARMA")
+)
+
+```
+
+### Dummy variables
+
+```{r load extra data and plot}
+
+# load extra data
+extra_data <- read_csv("https://www.dropbox.com/s/qay9q1jwpffxcqj/LondonAdditionalDataFixed.csv?raw=1")
+
+# join extra data with profile
+profiles <- profiles %>%
+  left_join(., extra_data, by = c("gss_code" = "Wardcode")) %>%
+  clean_names()
+
+profiles %>%
+  names() %>%
+  tail(., 10)
+
+# plot
+p <- ggplot(
+  profiles,
+  aes(x = unauth_absence_schools11,
+      y = average_gcse_capped_point_scores_2014)
+)
+p + geom_point(aes(color = inner_outer))
+
+```
+
+
+
+```{r clean data}
+
+# check the data types
+extra_class <- profiles %>%
+  dplyr::select(inner_outer) %>%
+  st_drop_geometry(.) %>%
+  summarise_all(class)
+
+# change to factor
+profiles <- profiles %>%
+  dplyr::mutate(inner_outer = relevel(as.factor(inner_outer), ref = "Outer"))
+
+# run the model
+model3 <- lm(average_gcse_capped_point_scores_2014 ~
+               unauthorised_absence_in_all_schools_percent_2013 +
+               log(median_house_price_2014) +
+               inner_outer,
+             data = profiles)
+
+tidy(model3)             
+
+```
+
